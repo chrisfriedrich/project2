@@ -2,7 +2,7 @@
 #include "packetdescriptor.h"
 #include "destination.h"
 #include "pid.h"
-
+#include "diagnostics.h"
 #include "packetdescriptorcreator.h"
 #include "freepacketdescriptorstore__full.h"
 #include "networkdevice.h"
@@ -18,21 +18,34 @@ NetworkDevice *network_device;
 
 FreePacketDescriptorStore *fpds;
 
+BoundedBuffer *out_buffer;
 BoundedBuffer *in_buffer[MAX_PID + 1];
-BoundedBuffer *out_buffer[MAX_PID + 1];
 
 pthread_t send_thread;
 pthread_t receive_thread;
 
 void *sending_thread() {
 
-    PacketDescriptor *packet_descriptor;
-
     int i;
 
     while(1)
     {
 
+        PacketDescriptor *packet_descriptor;
+
+        packet_descriptor = blockingReadBB(out_buffer);
+
+        for(i = 0; i < 5; i++)
+        {
+            if(send_packet(network_device, packet_descriptor) == 1)
+            {
+                break;
+            }
+        }
+
+        nonblocking_put_pd(fpds, packet_descriptor);
+    }
+    /*
         if(nonblockingReadBB(out_buffer, &packet_descriptor) == 0)
         {
             packet_descriptor = blockingReadBB(out_buffer);
@@ -56,19 +69,26 @@ void *sending_thread() {
         blocking_put_pd(fpds, &packet_descriptor);
     }
     
-    return NULL;
+    return NULL;*/
 }
 
 
 void *receiving_thread() {
 
-    PacketDescriptor *packet_descriptor;
-
-    PID pid;
 
     while(1)
     {
+        PacketDescriptor *packet_descriptor;
 
+        nonblocking_get_pd(fpds, &packet_descriptor);
+
+        init_packet_descriptor(packet_descriptor);
+
+        register_receiving_packetdescriptor(network_device, packet_descriptor);
+
+        await_incoming_packet(network_device);
+    }
+    /*
         if(nonblocking_get_pd(fpds, &packet_descriptor) == 1)
         {
             init_packet_descriptor(&packet_descriptor);
@@ -94,7 +114,7 @@ void *receiving_thread() {
         }
     }
 
-    return NULL;
+    return NULL;i*/
 }
 
 void blocking_send_packet(PacketDescriptor *pd){
@@ -122,10 +142,7 @@ void init_network_driver(NetworkDevice *nd, void *mem_start, unsigned long mem_l
 
     network_device = nd;
 
-    *fpds_ptr = create_fpds();
-    fpds = *fpds_ptr;
-
-    create_free_packet_descriptors(fpds, mem_start, mem_length);
+    out_buffer = createBB(MAX_PID);
 
     int i;
 
@@ -134,14 +151,30 @@ void init_network_driver(NetworkDevice *nd, void *mem_start, unsigned long mem_l
         in_buffer[i] = createBB(4);
     }
 
+    *fpds_ptr = create_fpds();
+    fpds = *fpds_ptr;
+
+    create_free_packet_descriptors(fpds, mem_start, mem_length);
+
     //out_buffer = createBB(MAX_PID);
 
 //    overflow_buffer = createBB(6);
 
   //  overflow_result = pthread_create(&buffer_thread, NULL, buffer_thread, NULL);
-    pthread_create(&send_thread, NULL, sending_thread, NULL);
-    pthread_create(&receive_thread, NULL, receiving_thread, NULL);
+    int send_result, receive_result;
+   
+    send_result  = pthread_create(&send_thread, NULL, &sending_thread, NULL);
+    receive_result = pthread_create(&receive_thread, NULL, &receiving_thread, NULL);
 
+    if(send_result != 0)
+    {
+        DIAGNOSTICS("Error - unable to create send_thread");
+    }
+
+    if(receive_result != 0)
+    {
+        DIAGNOSTICS("Error - unable to create receive_thread");
+    }
 }
 
 
